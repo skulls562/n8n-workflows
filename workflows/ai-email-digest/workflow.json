@@ -1,0 +1,66 @@
+{
+  "name": "Resumen diario de correo a Telegram (Ollama local)",
+  "nodes": [
+    {
+      "id": "n1", "name": "Correo nuevo (IMAP)", "type": "n8n-nodes-base.emailReadImap", "typeVersion": 2, "position": [0, 0],
+      "parameters": { "mailbox": "INBOX", "postProcessAction": "nothing", "options": {} }
+    },
+    {
+      "id": "n2", "name": "Guardar en buffer", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [260, 0],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const s = $getWorkflowStaticData('global');\nif (!s.buffer) s.buffer = [];\nconst j = $json;\nconst texto = String(j.textPlain || j.text || j.subject || '').replace(/\\s+/g, ' ').slice(0, 400);\ns.buffer.push({ de: String(j.from || ''), asunto: String(j.subject || ''), fecha: String(j.date || ''), extracto: texto });\nif (s.buffer.length > 60) s.buffer = s.buffer.slice(-60);\nreturn { json: { guardados: s.buffer.length } };"
+      }
+    },
+    {
+      "id": "n3", "name": "Todos los dias 8:00", "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.2, "position": [0, 300],
+      "parameters": { "rule": { "interval": [ { "field": "cronExpression", "expression": "0 8 * * *" } ] } }
+    },
+    {
+      "id": "n4", "name": "Leer y vaciar buffer", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [260, 300],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const s = $getWorkflowStaticData('global');\nconst correos = s.buffer || [];\ns.buffer = [];\nconst lista = correos.slice(-25).map((c, i) => `${i + 1}. De: ${c.de}\\n   Asunto: ${c.asunto}\\n   Extracto: ${c.extracto}`).join('\\n');\nreturn [{ json: { total: correos.length, lista } }];"
+      }
+    },
+    {
+      "id": "n5", "name": "Hay correos?", "type": "n8n-nodes-base.if", "typeVersion": 2.2, "position": [520, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [ { "id": "c1", "leftValue": "={{ $json.total }}", "rightValue": 0, "operator": { "type": "number", "operation": "gt" } } ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "n6", "name": "Clasificar y resumir", "type": "@n8n/n8n-nodes-langchain.chainLlm", "typeVersion": 1.5, "position": [780, 280],
+      "parameters": {
+        "promptType": "define",
+        "text": "=Eres mi asistente de correo. Estos son los {{ $json.total }} correos recibidos desde ayer (se muestran los ultimos 25):\n\n{{ $json.lista }}\n\nResponde SOLO en espanol, texto plano sin markdown, con este formato:\nURGENTE: lista corta (remitente - motivo) o 'ninguno'\nPARA RESPONDER: lista corta o 'ninguno'\nRUIDO: una sola linea con el numero aproximado y el tipo (promos, notificaciones, newsletters)\nSe breve, maximo 12 lineas en total."
+      }
+    },
+    {
+      "id": "n7", "name": "Ollama qwen2.5", "type": "@n8n/n8n-nodes-langchain.lmChatOllama", "typeVersion": 1, "position": [780, 520],
+      "parameters": { "model": "qwen2.5:7b", "options": { "temperature": 0.2 } }
+    },
+    {
+      "id": "n8", "name": "Enviar a Telegram", "type": "n8n-nodes-base.telegram", "typeVersion": 1.2, "position": [1100, 280],
+      "parameters": {
+        "chatId": "PON_AQUI_TU_CHAT_ID",
+        "text": "=Resumen de correo ({{ $('Hay correos?').item.json.total }} nuevos)\n\n{{ $json.text }}",
+        "additionalFields": { "appendAttribution": false, "parse_mode": "" }
+      }
+    }
+  ],
+  "connections": {
+    "Correo nuevo (IMAP)": { "main": [ [ { "node": "Guardar en buffer", "type": "main", "index": 0 } ] ] },
+    "Todos los dias 8:00": { "main": [ [ { "node": "Leer y vaciar buffer", "type": "main", "index": 0 } ] ] },
+    "Leer y vaciar buffer": { "main": [ [ { "node": "Hay correos?", "type": "main", "index": 0 } ] ] },
+    "Hay correos?": { "main": [ [ { "node": "Clasificar y resumir", "type": "main", "index": 0 } ], [] ] },
+    "Clasificar y resumir": { "main": [ [ { "node": "Enviar a Telegram", "type": "main", "index": 0 } ] ] },
+    "Ollama qwen2.5": { "ai_languageModel": [ [ { "node": "Clasificar y resumir", "type": "ai_languageModel", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1", "timezone": "America/Bogota" }
+}
